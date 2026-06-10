@@ -1,0 +1,30 @@
+server:
+  http_listen_port: 3200
+
+distributor:
+  receivers:
+    otlp:
+      protocols:
+        grpc:
+        http:
+
+ingester:
+  max_block_duration: 5m
+
+compactor:
+  ring:
+    kvstore:
+      store: memberlist
+  compaction:
+    block_extraction_clean_up: true
+    compacted_block_retention: 1h
+
+storage:
+  trace:
+    backend: local
+    block:
+      blobs_storage: local
+      local:
+        path: /tmp/tempo/blocks
+    wal:
+      path: /tmp/tempo/wal

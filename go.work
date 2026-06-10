@@ -1,0 +1,10 @@
+go 1.26.4
+
+use (
+	./clients/go-hook
+	./services/siphon-ingress
+	./services/siphon-sink
+	./services/siphon-stream-api
+	./shared/proto
+	./shared/telemetry
+)

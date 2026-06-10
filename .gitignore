@@ -1,0 +1,10 @@
+# Dependency and Binary Directories
+protoc_bin/
+node_modules/
+dist/
+
+# Local Configurations & Logs
+.system_generated/
+*.log
+*.zip
+*.exe
