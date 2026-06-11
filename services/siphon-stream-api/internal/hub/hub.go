@@ -93,7 +93,7 @@ func (h *Hub) TailMongoChangeStream(ctx context.Context, collection *mongo.Colle
 
 	log.Printf("MongoDB Change Stream watch failed: %v. Falling back to active database polling loop.", err)
 	
-	var lastSeen time.Time
+	var lastSeen = time.Now().Add(-10 * time.Second)
 	for {
 		select {
 		case <-ctx.Done():

@@ -246,6 +246,9 @@ type TestSuite struct {
 	Environment   string                 `protobuf:"bytes,3,opt,name=environment,proto3" json:"environment,omitempty"`
 	ExecutionId   string                 `protobuf:"bytes,4,opt,name=execution_id,json=executionId,proto3" json:"execution_id,omitempty"`
 	Timestamp     *timestamppb.Timestamp `protobuf:"bytes,5,opt,name=timestamp,proto3" json:"timestamp,omitempty"`
+	Project       string                 `protobuf:"bytes,6,opt,name=project,proto3" json:"project,omitempty"`
+	Release       string                 `protobuf:"bytes,7,opt,name=release,proto3" json:"release,omitempty"`
+	Sprint        string                 `protobuf:"bytes,8,opt,name=sprint,proto3" json:"sprint,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -313,6 +316,27 @@ func (x *TestSuite) GetTimestamp() *timestamppb.Timestamp {
 		return x.Timestamp
 	}
 	return nil
+}
+
+func (x *TestSuite) GetProject() string {
+	if x != nil {
+		return x.Project
+	}
+	return ""
+}
+
+func (x *TestSuite) GetRelease() string {
+	if x != nil {
+		return x.Release
+	}
+	return ""
+}
+
+func (x *TestSuite) GetSprint() string {
+	if x != nil {
+		return x.Sprint
+	}
+	return ""
 }
 
 type TestCase struct {
@@ -480,13 +504,16 @@ const file_shared_proto_siphon_proto_rawDesc = "" +
 	"test_steps\x18\x03 \x03(\v2\x10.siphon.TestStepR\ttestSteps\"N\n" +
 	"\x18TestResultStreamResponse\x12\x18\n" +
 	"\asuccess\x18\x01 \x01(\bR\asuccess\x12\x18\n" +
-	"\amessage\x18\x02 \x01(\tR\amessage\"\xae\x01\n" +
+	"\amessage\x18\x02 \x01(\tR\amessage\"\xfa\x01\n" +
 	"\tTestSuite\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x12\n" +
 	"\x04name\x18\x02 \x01(\tR\x04name\x12 \n" +
 	"\venvironment\x18\x03 \x01(\tR\venvironment\x12!\n" +
 	"\fexecution_id\x18\x04 \x01(\tR\vexecutionId\x128\n" +
-	"\ttimestamp\x18\x05 \x01(\v2\x1a.google.protobuf.TimestampR\ttimestamp\"\x9f\x02\n" +
+	"\ttimestamp\x18\x05 \x01(\v2\x1a.google.protobuf.TimestampR\ttimestamp\x12\x18\n" +
+	"\aproject\x18\x06 \x01(\tR\aproject\x12\x18\n" +
+	"\arelease\x18\a \x01(\tR\arelease\x12\x16\n" +
+	"\x06sprint\x18\b \x01(\tR\x06sprint\"\x9f\x02\n" +
 	"\bTestCase\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x19\n" +
 	"\bsuite_id\x18\x02 \x01(\tR\asuiteId\x12\x12\n" +

@@ -2,7 +2,6 @@ package worker
 
 import (
 	"context"
-	"encoding/json"
 	"log"
 	"time"
 
@@ -11,6 +10,7 @@ import (
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
 	"go.opentelemetry.io/otel"
+	"google.golang.org/protobuf/proto"
 
 	pb "shared/proto/siphon"
 )
@@ -28,9 +28,9 @@ func (rw *ResultWorker) ProcessMessages(workerID int, msgs <-chan amqp.Delivery)
 		ctx, span := tr.Start(context.Background(), "SinkProcessMessage")
 
 		var streamReq pb.TestResultStreamRequest
-		if err := json.Unmarshal(d.Body, &streamReq); err != nil {
-			log.Printf("Worker %d: Malformed json payload: %v", workerID, err)
-			d.Ack(false)
+		if err := proto.Unmarshal(d.Body, &streamReq); err != nil {
+			log.Printf("Worker %d: Malformed protobuf binary payload: %v. Routing to DLQ.", workerID, err)
+			d.Nack(false, false) // Reject and route to DLQ instead of dropping or infinite loops
 			span.RecordError(err)
 			span.End()
 			continue
@@ -52,6 +52,9 @@ func (rw *ResultWorker) ProcessMessages(workerID int, msgs <-chan amqp.Delivery)
 			"suite_id":        streamReq.TestSuite.Id,
 			"suite_name":      streamReq.TestSuite.Name,
 			"environment":     streamReq.TestSuite.Environment,
+			"project":         streamReq.TestSuite.Project,
+			"release":         streamReq.TestSuite.Release,
+			"sprint":          streamReq.TestSuite.Sprint,
 			"timestamp":       time.Unix(streamReq.TestSuite.Timestamp.GetSeconds(), int64(streamReq.TestSuite.Timestamp.GetNanos())),
 			"test_case_name":  streamReq.TestCase.Name,
 			"status":          streamReq.TestCase.Status.String(),

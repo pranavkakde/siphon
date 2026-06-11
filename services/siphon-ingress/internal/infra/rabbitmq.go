@@ -41,13 +41,64 @@ func NewRabbitClient() (*RabbitClient, error) {
 		return nil, err
 	}
 
+	// Declare DLX Exchange
+	err = ch.ExchangeDeclare(
+		"siphon-dlx-exchange", // name
+		"direct",              // type
+		true,                  // durable
+		false,                 // auto-deleted
+		false,                 // internal
+		false,                 // no-wait
+		nil,                   // arguments
+	)
+	if err != nil {
+		ch.Close()
+		conn.Close()
+		return nil, err
+	}
+
+	// Declare DLQ (Dead Letter Queue)
+	_, err = ch.QueueDeclare(
+		"siphon-dlq", // name
+		true,         // durable
+		false,        // delete when unused
+		false,        // exclusive
+		false,        // no-wait
+		nil,          // arguments
+	)
+	if err != nil {
+		ch.Close()
+		conn.Close()
+		return nil, err
+	}
+
+	// Bind DLQ to DLX exchange
+	err = ch.QueueBind(
+		"siphon-dlq",
+		"siphon-routing-dlkey",
+		"siphon-dlx-exchange",
+		false,
+		nil,
+	)
+	if err != nil {
+		ch.Close()
+		conn.Close()
+		return nil, err
+	}
+
+	// Declare primary buffer queue with x-dead-letter-exchange routing attributes
+	args := amqp.Table{
+		"x-dead-letter-exchange":    "siphon-dlx-exchange",
+		"x-dead-letter-routing-key": "siphon-routing-dlkey",
+	}
+
 	_, err = ch.QueueDeclare(
 		"siphon-buffer-queue", // name
 		true,                  // durable
 		false,                 // delete when unused
 		false,                 // exclusive
 		false,                 // no-wait
-		nil,                   // arguments
+		args,                  // arguments binding DLX
 	)
 	if err != nil {
 		ch.Close()

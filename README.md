@@ -2,6 +2,8 @@
 
 Siphon is a high-throughput, real-time open-source test analytics platform designed to capture automated test suite execution metrics, manage screenshots of test failures via object storage, and stream live execution feeds straight to an interactive, premium engineering dashboard.
 
+![Siphon Dashboard Mockup](siphon_dashboard_mockup.png)
+
 ---
 
 ## Architecture Overview
@@ -15,12 +17,12 @@ Siphon is built on a decoupled, microservice-oriented event pipeline:
             │
             └─► Stream Test Case Metadata ─────► [siphon-ingress API (50051)]
                                                           │
-                                                (JSON Serialization)
+                                                (Binary Serialization)
                                                           │
                                                           ▼
                                             [RabbitMQ Buffer Queue (5672)]
                                                           │
-                                                (Go Routine Consumer Pool)
+                                                 (Dead Letter Queue Bind)
                                                           │
                                                           ▼
                                             [siphon-sink Worker Pool]
@@ -28,7 +30,7 @@ Siphon is built on a decoupled, microservice-oriented event pipeline:
                                                 (Idempotent Upsert Writes)
                                                           │
                                                           ▼
-                                              [MongoDB database (27017)]
+                                            [MongoDB Time-Series DB (27017)]
                                                           │
                                                 (Change Stream/Poll Tailing)
                                                           │
@@ -50,16 +52,17 @@ The project is managed inside a Go workspace (`go.work` multi-module layout) alo
 ```
 siphon/
 ├── apps/
-│   └── siphon-glass/            # Vite + React + TS dashboard client
+│   └── siphon-glass/            # Vite + React + TS dashboard client (Recharts, Lucide)
 ├── services/
-│   ├── siphon-ingress/          # Go gRPC stream ingestion edge service
+│   ├── siphon-ingress/          # Go gRPC stream ingestion edge service (Binary Protobuf)
 │   ├── siphon-sink/             # Go consumer worker pool inserting to MongoDB
 │   └── siphon-stream-api/       # Go Gorilla WebSocket server tailing Mongo
 ├── shared/
 │   ├── proto/                   # Protobuf schema and compiled Go bindings
 │   └── telemetry/               # Shared OpenTelemetry configuration utilities
 ├── clients/
-│   └── go-hook/                 # Mock client framework simulation
+│   ├── go-hook/                 # Mock client framework simulation
+│   └── seeder/                  # High-volume mock database seeder (1000s of records)
 ├── docker/                      # MongoDB init indexing script
 └── docker-compose.yml           # Core database, broker, and LGPL observability configuration
 ```
@@ -82,11 +85,13 @@ siphon/
 
 ---
 
-## Database Indempotency Rule
+## Production-Grade Enhancements
 
-Siphon ensures zero-duplication data processing by enforcing a composite unique indexing constraint inside MongoDB:
-* Unique compound key: `execution_id + test_case_id`
-* The `siphon-sink` worker pool consumes messages and performs updates using `UpdateOne(..., options.Update().SetUpsert(true))`. Duplicate keys resulting from racing or retried gRPC connections are intercepted safely and acknowledged out of the broker queue without panicking or creating duplicated rows.
+The codebase implements several advanced systems engineering principles:
+* **Binary Protobuf Broker Pipeline**: Instead of slow JSON parsing on the edge API, `siphon-ingress` forwards raw binary protobuf packets (`proto.Marshal`) directly to RabbitMQ using the `application/x-protobuf` content-type. The consumer pool (`siphon-sink`) performs the deserialization, minimizing ingestion latency.
+* **Dead Letter Exchanges (DLX)**: If messages are malformed or fail to process, they are rejected with a `Nack(false, false)` and routed to the direct exchange `siphon-dlx-exchange` and stored in `siphon-dlq` to prevent consumer lockups.
+* **MongoDB Time-Series Storage**: The test results are persisted in a native MongoDB Time-Series collection partitioned chronologically via `timeField: "timestamp"` and `metaField: "project"`, ensuring query optimizations and data compaction.
+* **Idempotency Standard**: Unique compound index `{ "execution_id": 1, "test_case_id": 1 }` avoids duplicate runs.
 
 ---
 
@@ -98,39 +103,26 @@ Siphon ensures zero-duplication data processing by enforcing a composite unique 
 * Docker Desktop
 
 ### 1. Launch local Infrastructure Services
-Spin up MongoDB, RabbitMQ, MinIO, and the telemetry stack (OTel Collector, Prometheus, Tempo, Loki, Grafana) via Docker Compose:
 ```bash
 docker compose up -d
 ```
 
-### 2. Run Go microservices (Concurrently in background)
+### 2. Seed the Database
+To populate the dashboard with 1,250 historical test results across multiple projects (`siphon-core`, `payment-gateway`, `auth-service`, `notifications-engine`), releases, and sprints:
+```bash
+go run clients/seeder/seeder.go
+```
 
-Start the edge ingestion endpoint:
+### 3. Run Go microservices (Concurrently in background)
 ```bash
 go run services/siphon-ingress/main.go
-```
-
-Start the sink worker pool consumer:
-```bash
 go run services/siphon-sink/main.go
-```
-
-Start the real-time API socket server:
-```bash
 go run services/siphon-stream-api/main.go
 ```
 
-### 3. Start the Web Dashboard Client
-Run the Vite development server for the React UI:
+### 4. Start the Web Dashboard Client
 ```bash
 cd apps/siphon-glass
 npm run dev
 ```
-Open `http://localhost:5173/` in your browser.
-
-### 4. Trigger Integration Simulation
-To test the pipeline end-to-end, execute the simulated mock test suite runner. It generates a test execution run, uploads a dummy screenshot, and streams results over gRPC:
-```bash
-go run clients/go-hook/client.go
-```
-The dashboard charts and feeds will update automatically in real-time.
+Open `http://localhost:5173/` in your browser. Use the top filters and search bar to drill down into the live test metrics.

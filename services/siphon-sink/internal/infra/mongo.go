@@ -28,6 +28,15 @@ func NewMongoClient() (*MongoClient, error) {
 	}
 
 	db := client.Database("siphon")
+
+	// Create Time-Series collection if it doesn't exist yet
+	// Timefield: timestamp, Metafield: project
+	_ = db.CreateCollection(context.Background(), "siphon_results", 
+		options.CreateCollection().SetTimeSeriesOptions(
+			options.TimeSeries().SetTimeField("timestamp").SetMetaField("project").SetGranularity("seconds"),
+		),
+	)
+
 	collection := db.Collection("siphon_results")
 
 	// Ensure unique index compound key exists as fail-safe
@@ -39,7 +48,7 @@ func NewMongoClient() (*MongoClient, error) {
 		Options: options.Index().SetUnique(true),
 	})
 	if err != nil {
-		log.Printf("Unique index compound keys verified: %v", err)
+		log.Printf("Unique index compound keys validated: %v", err)
 	}
 
 	return &MongoClient{

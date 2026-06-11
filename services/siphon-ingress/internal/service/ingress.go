@@ -1,13 +1,13 @@
 package service
 
 import (
-	"encoding/json"
 	"io"
 	"log"
 	"time"
 
 	amqp "github.com/rabbitmq/amqp091-go"
 	"go.opentelemetry.io/otel"
+	"google.golang.org/protobuf/proto"
 
 	pb "shared/proto/siphon"
 )
@@ -39,9 +39,10 @@ func (s *IngressService) StreamTestResults(stream pb.IngressService_StreamTestRe
 
 		_, span := tr.Start(ctx, "IngestTestResult")
 
-		payload, err := json.Marshal(req)
+		// High-performance binary protobuf serialization (DRY/low CPU overhead)
+		payload, err := proto.Marshal(req)
 		if err != nil {
-			log.Printf("Failed to marshal test result stream req: %v", err)
+			log.Printf("Failed to marshal test result protobuf: %v", err)
 			span.RecordError(err)
 			span.End()
 			continue
@@ -54,7 +55,7 @@ func (s *IngressService) StreamTestResults(stream pb.IngressService_StreamTestRe
 			false,
 			false,
 			amqp.Publishing{
-				ContentType: "application/json",
+				ContentType: "application/x-protobuf",
 				Body:        payload,
 				Timestamp:   time.Now(),
 			},

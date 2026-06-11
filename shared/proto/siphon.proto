@@ -29,6 +29,9 @@ message TestSuite {
   string environment = 3;
   string execution_id = 4;
   google.protobuf.Timestamp timestamp = 5;
+  string project = 6;
+  string release = 7;
+  string sprint = 8;
 }
 
 message TestCase {
