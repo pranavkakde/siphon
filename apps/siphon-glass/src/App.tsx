@@ -41,6 +41,9 @@ interface SprintMetric {
   passed: number;
 }
 
+const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8080';
+const WS_URL = import.meta.env.VITE_WS_URL || 'ws://localhost:8080';
+
 export default function App() {
   const [runs, setRuns] = useState<TestRun[]>([]);
   const [projectMetrics, setProjectMetrics] = useState<ProjectMetric[]>([]);
@@ -81,7 +84,7 @@ export default function App() {
   }, [filters]);
 
   useEffect(() => {
-    const ws = new WebSocket('ws://localhost:8080/ws');
+    const ws = new WebSocket(`${WS_URL}/ws`);
     ws.onopen = () => setConnected(true);
     ws.onclose = () => setConnected(false);
     ws.onmessage = (event) => {
@@ -128,7 +131,7 @@ export default function App() {
       search: currentFilters.search
     }).toString();
 
-    fetch(`http://localhost:8080/api/runs?${params}`)
+    fetch(`${API_URL}/api/runs?${params}`)
       .then(res => res.json())
       .then((data: TestRun[]) => {
         if (Array.isArray(data)) {
@@ -148,7 +151,7 @@ export default function App() {
       search: currentFilters.search
     }).toString();
 
-    fetch(`http://localhost:8080/api/stats?${params}`)
+    fetch(`${API_URL}/api/stats?${params}`)
       .then(res => res.json())
       .then((data) => {
         if (data) {
