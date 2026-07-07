@@ -49,12 +49,23 @@ func main() {
 	}
 	defer conn.Close()
 
+	// Ingestion consumer channel
 	ch, err := conn.Channel()
 	if err != nil {
 		log.Fatalf("Failed to open RabbitMQ channel: %v", err)
 	}
 	defer ch.Close()
 
+	// Separate channel for publishing to analysis queue (prevents head-of-line blocking)
+	analysisCh, err := conn.Channel()
+	if err != nil {
+		log.Printf("Warning: Failed to open analysis channel, AI analysis disabled: %v", err)
+		analysisCh = nil
+	} else {
+		defer analysisCh.Close()
+	}
+
+	// Declare ingestion queue
 	qName := "siphon-buffer-queue"
 	_, err = ch.QueueDeclare(
 		qName,
@@ -62,10 +73,30 @@ func main() {
 		false,
 		false,
 		false,
-		nil,
+		amqp.Table{
+			"x-dead-letter-exchange":    "siphon-dlx-exchange",
+			"x-dead-letter-routing-key": "siphon-routing-dlkey",
+		},
 	)
 	if err != nil {
 		log.Fatalf("Failed to declare queue: %v", err)
+	}
+
+	// Declare analysis queue (durable, so jobs survive restarts)
+	analysisQName := "siphon-analysis-queue"
+	if analysisCh != nil {
+		_, err = analysisCh.QueueDeclare(
+			analysisQName,
+			true,
+			false,
+			false,
+			false,
+			nil,
+		)
+		if err != nil {
+			log.Printf("Warning: Failed to declare analysis queue, AI analysis disabled: %v", err)
+			analysisCh = nil
+		}
 	}
 
 	err = ch.Qos(100, 0, false)
@@ -90,7 +121,9 @@ func main() {
 	fmt.Printf("Starting worker pool subscriber. CPU workers running: %d\n", numCPUs)
 
 	resultWorker := &worker.ResultWorker{
-		Collection: mongoClient.Collection,
+		Collection:    mongoClient.Collection,
+		AnalysisChan:  analysisCh,
+		AnalysisQueue: analysisQName,
 	}
 
 	for w := 1; w <= numCPUs; w++ {

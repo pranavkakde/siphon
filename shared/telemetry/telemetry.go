@@ -15,7 +15,7 @@ import (
 func InitTracer(serviceName string) (*sdktrace.TracerProvider, error) {
 	otelAgentAddr := os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT")
 	if otelAgentAddr == "" {
-		otelAgentAddr = "localhost:4317"
+		otelAgentAddr = "127.0.0.1:4317"
 	}
 
 	exporter, err := otlptracegrpc.New(

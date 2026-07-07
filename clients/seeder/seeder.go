@@ -18,23 +18,101 @@ type TestStep struct {
 	DurationMs int64  `bson:"duration_ms"`
 }
 
+type AIAnalysis struct {
+	Category     string    `bson:"category"`
+	Confidence   float64   `bson:"confidence"`
+	RootCause    string    `bson:"root_cause"`
+	SuggestedFix string    `bson:"suggested_fix"`
+	AnalyzedAt   time.Time `bson:"analyzed_at"`
+	Model        string    `bson:"model"`
+	Provider     string    `bson:"provider"`
+}
+
 type TestRun struct {
-	ExecutionID  string     `bson:"execution_id"`
-	TestCaseID   string     `bson:"test_case_id"`
-	SuiteID      string     `bson:"suite_id"`
-	SuiteName    string     `bson:"suite_name"`
-	Environment  string     `bson:"environment"`
-	Project      string     `bson:"project"`
-	Release      string     `bson:"release"`
-	Sprint       string     `bson:"sprint"`
-	Timestamp    time.Time  `bson:"timestamp"`
-	TestCaseName string     `bson:"test_case_name"`
-	Status       string     `bson:"status"`
-	DurationMs   int64      `bson:"duration_ms"`
-	ErrorMessage string     `bson:"error_message,omitempty"`
+	ExecutionID   string     `bson:"execution_id"`
+	TestCaseID    string     `bson:"test_case_id"`
+	SuiteID       string     `bson:"suite_id"`
+	SuiteName     string     `bson:"suite_name"`
+	Environment   string     `bson:"environment"`
+	Project       string     `bson:"project"`
+	Release       string     `bson:"release"`
+	Sprint        string     `bson:"sprint"`
+	Timestamp     time.Time  `bson:"timestamp"`
+	TestCaseName  string     `bson:"test_case_name"`
+	Status        string     `bson:"status"`
+	DurationMs    int64      `bson:"duration_ms"`
+	ErrorMessage  string     `bson:"error_message,omitempty"`
 	ScreenshotURL string     `bson:"screenshot_url,omitempty"`
-	Steps        []TestStep `bson:"steps"`
-	UpdatedAt    time.Time  `bson:"updated_at"`
+	Steps         []TestStep `bson:"steps"`
+	// Rich contextual artifact fields
+	DOMSnapshot string `bson:"dom_snapshot,omitempty"`
+	HARData     string `bson:"har_data,omitempty"`
+	ErrorTrace  string `bson:"error_trace,omitempty"`
+	// AI analysis fields
+	AIStatus   string      `bson:"ai_status,omitempty"`
+	AIAnalysis *AIAnalysis `bson:"ai_analysis,omitempty"`
+	UpdatedAt  time.Time   `bson:"updated_at"`
+}
+
+// Synthetic DOM snapshots for demo purposes
+var syntheticDOMSnapshots = []string{
+	`<div id="checkout-form"><button id="submit-payment-btn" class="btn btn-primary" disabled>Pay Now</button><span class="error-msg">Payment gateway timeout</span></div>`,
+	`<div class="login-container"><input id="username-field" type="text" /><button id="login-btn" class="btn" aria-disabled="true">Sign In</button></div>`,
+	`<table id="data-grid"><tbody><tr class="row-stale" data-version="2023-01-01"><!-- stale cached data --></tr></tbody></table>`,
+	`<div id="api-response-panel"><pre class="error">{"error":"503 Service Unavailable","message":"Upstream API unreachable"}</pre></div>`,
+	`<form id="notification-form"><select id="recipient-select" disabled></select><p class="hint">Recipients list failed to load</p></form>`,
+}
+
+// Synthetic HAR data (failed requests only) for demo purposes
+var syntheticHARData = []string{
+	`{"log":{"entries":[{"request":{"method":"POST","url":"https://api.stripe.com/v1/payment_intents"},"response":{"status":408,"statusText":"Request Timeout"},"timings":{"wait":29847}}]}}`,
+	`{"log":{"entries":[{"request":{"method":"GET","url":"/api/v2/users/me"},"response":{"status":401,"statusText":"Unauthorized"},"timings":{"wait":45}}]}}`,
+	`{"log":{"entries":[{"request":{"method":"GET","url":"/api/data/records?page=1"},"response":{"status":200,"statusText":"OK","content":{"mimeType":"application/json","text":"{\"data\":[]}"}},"timings":{"wait":12}}]}}`,
+	`{"log":{"entries":[{"request":{"method":"POST","url":"https://notifications.internal/send"},"response":{"status":503,"statusText":"Service Unavailable"},"timings":{"wait":5001}}]}}`,
+	`{"log":{"entries":[{"request":{"method":"PUT","url":"/api/settings/cache"},"response":{"status":500,"statusText":"Internal Server Error"},"timings":{"wait":3012}}]}}`,
+}
+
+// Synthetic error traces for demo purposes
+var syntheticErrorTraces = []string{
+	"TimeoutError: Waiting for element '#submit-payment-btn' to be enabled\n  at Object.<anonymous> (tests/checkout.spec.ts:47:5)\n  at processTicksAndRejections (node:internal/process/task_queues:95:5)\nCaused by: net::ERR_CONNECTION_TIMED_OUT",
+	"AssertionError: expected 200 but received 401\n  at Context.<anonymous> (tests/auth.spec.ts:23:12)\n  Error: Request to GET /api/v2/users/me returned 401 Unauthorized",
+	"Error: Selector '#data-grid tr' returned 0 rows, expected at least 1\n  at DataGrid.waitForRows (lib/helpers.ts:88:3)\n  at Context.<anonymous> (tests/data.spec.ts:61:5)",
+	"Error: upstream dependency 'notification-service' unavailable\n  at NotificationTest.send (tests/notifications.spec.ts:34:9)\n  503 Service Unavailable — retry limit (3) exceeded",
+	"ReferenceError: Cannot read properties of undefined (reading 'token')\n  at CacheManager.flush (lib/cache.ts:112:17)\n  at Context.<anonymous> (tests/cache.spec.ts:19:5)",
+}
+
+// Synthetic AI analyses for seeded FAIL records
+var syntheticAIAnalyses = []AIAnalysis{
+	{
+		Category:     "API_Failure",
+		Confidence:   0.92,
+		RootCause:    "The Stripe payment intent API returned a 408 timeout after 29 seconds, exceeding the test runner's 30-second limit. The external payment gateway appears to be throttling connections from the CI environment's IP range.",
+		SuggestedFix: "// Increase timeout and add retry with backoff\nawait page.waitForResponse(res => res.url().includes('stripe.com'), { timeout: 60000 });\n// Or mock the Stripe endpoint in CI:\nnock('https://api.stripe.com').post('/v1/payment_intents').reply(200, mockPaymentIntent);",
+	},
+	{
+		Category:     "Environment_Issue",
+		Confidence:   0.88,
+		RootCause:    "The API returned a 401 Unauthorized because the test JWT token expired between setup and assertion — the token TTL is 30 seconds but the test setup takes 35 seconds in CI. This is an environment timing issue, not a code bug.",
+		SuggestedFix: "// Refresh the token immediately before the assertion step\nconst token = await authHelper.refreshToken();\nrequest.setHeader('Authorization', `Bearer ${token}`);\n// Or set token TTL to 10 minutes in the test environment config.",
+	},
+	{
+		Category:     "Data_Stale",
+		Confidence:   0.85,
+		RootCause:    "The data grid returned 0 rows because the test database was seeded with records from 2023, which are filtered out by the default 'last 30 days' date range filter applied in the query. The test data is stale and does not match the active filter.",
+		SuggestedFix: "// Seed with a relative timestamp\nconst record = await db.insert({ ...testData, created_at: new Date() });\n// Or override the default filter in the test:\nawait page.selectOption('#date-filter', 'all-time');",
+	},
+	{
+		Category:     "Environment_Issue",
+		Confidence:   0.91,
+		RootCause:    "The notification service returned 503 after 3 retries because the dependency is not deployed in the QA-Integration environment — it is only available in Staging-US-East. The test should be tagged to skip in unsupported environments.",
+		SuggestedFix: "// Add environment guard at test start\nif (process.env.TEST_ENV !== 'Staging-US-East') {\n  test.skip('Notification service not available in this environment');\n}",
+	},
+	{
+		Category:     "Locator_Changed",
+		Confidence:   0.79,
+		RootCause:    "The CacheManager references a 'token' property that was renamed to 'accessToken' in a recent API contract change. The selector path is still pointing to the old field name, causing a ReferenceError at runtime.",
+		SuggestedFix: "// Update the property reference in the test helper\n// Before: const token = cache.token;\n// After:\nconst token = cache.accessToken ?? cache.token; // backward-compat shim\n// Then update the test fixture to use the new field name.",
+	},
 }
 
 func main() {
@@ -114,6 +192,11 @@ func main() {
 		var errMsg string
 		var screenshot string
 		var steps []TestStep
+		var domSnapshot string
+		var harData string
+		var errorTrace string
+		var aiStatus string
+		var aiAnalysis *AIAnalysis
 
 		if statusVal < 0.15 { // 15% FAIL rate
 			status = "FAIL"
@@ -124,6 +207,23 @@ func main() {
 				{Name: "Initialize request context", Status: "PASS", DurationMs: 15},
 				{Name: "Check local credit limits", Status: "PASS", DurationMs: 30},
 				{Name: "Call external payment token handler", Status: "FAIL", DurationMs: duration - 45},
+			}
+			// Attach synthetic rich artifact data
+			artifactIdx := random.Intn(len(syntheticDOMSnapshots))
+			domSnapshot = syntheticDOMSnapshots[artifactIdx]
+			harData = syntheticHARData[artifactIdx]
+			errorTrace = syntheticErrorTraces[artifactIdx]
+			// Attach pre-computed AI analysis for demo (70% have analysis, 30% still pending)
+			if random.Float32() < 0.70 {
+				analysisIdx := random.Intn(len(syntheticAIAnalyses))
+				a := syntheticAIAnalyses[analysisIdx]
+				a.AnalyzedAt = time.Now().Add(-time.Duration(random.Intn(3600)) * time.Second)
+				a.Model = "gpt-4o-mini"
+				a.Provider = "openai"
+				aiAnalysis = &a
+				aiStatus = "done"
+			} else {
+				aiStatus = "pending"
 			}
 		} else if statusVal < 0.23 { // 8% SKIPPED rate
 			status = "SKIPPED"
@@ -156,6 +256,11 @@ func main() {
 			ErrorMessage:  errMsg,
 			ScreenshotURL: screenshot,
 			Steps:         steps,
+			DOMSnapshot:   domSnapshot,
+			HARData:       harData,
+			ErrorTrace:    errorTrace,
+			AIStatus:      aiStatus,
+			AIAnalysis:    aiAnalysis,
 			UpdatedAt:     time.Now(),
 		}
 

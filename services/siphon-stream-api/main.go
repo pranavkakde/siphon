@@ -37,6 +37,7 @@ func main() {
 	apiHandler := &handler.APIHandler{
 		Collection: mongoClient.Collection,
 		Hub:        hubInstance,
+		DB:         mongoClient.DB,
 	}
 
 	r := gin.Default()
@@ -54,9 +55,17 @@ func main() {
 		c.Next()
 	})
 
+	// Core endpoints
 	r.GET("/ws", apiHandler.HandleWS)
 	r.GET("/api/runs", apiHandler.GetRecentRuns)
 	r.GET("/api/stats", apiHandler.GetStats)
+
+	// AI Analysis endpoint
+	r.GET("/api/runs/:execution_id/:test_case_id/analysis", apiHandler.GetTestAnalysis)
+
+	// LLM Settings endpoints
+	r.GET("/api/settings", apiHandler.GetSettings)
+	r.POST("/api/settings", apiHandler.SaveSettings)
 
 	port := os.Getenv("PORT")
 	if port == "" {

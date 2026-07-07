@@ -119,6 +119,7 @@ services:
       - loki
       - tempo
 
+
 volumes:
   siphon-mongo-data:
   siphon-rabbitmq-data:

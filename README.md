@@ -18,12 +18,18 @@ graph TD
   Ingress -->|JSON over AMQP| Rabbit[RabbitMQ Buffer Queue]
   Sink[siphon-sink Worker Pool] -->|Consume| Rabbit
   Sink -->|Idempotent Upsert| DB[(MongoDB Time-Series)]
+  Sink -->|JSON over AMQP| AnalysisQueue[RabbitMQ Analysis Queue]
+
+  Analyzer[siphon-analyzer Worker Pool] -->|Consume| AnalysisQueue
+  Analyzer -->|LLM Dispatch| ExternalAI[OpenAI / Anthropic / Ollama]
+  Analyzer -->|Upsert AI Result| DB
   
   StreamAPI[siphon-stream-api :8080] -->|Poll tail / Change Stream| DB
   
   UI[siphon-glass UI :5173] -->|1. WebSocket Connection :8080/ws| StreamAPI
   UI -->|2. HTTP GET :8080/api/runs & /api/stats| StreamAPI
   UI -->|3. HTTP GET :9000/siphon-screenshots/| MinIO
+  UI -->|4. AI Settings /api/settings| StreamAPI
 ```
 
 ### Ingestion Pipeline (Source to Database)
@@ -31,6 +37,7 @@ graph TD
 * **MinIO Storage:** Test clients upload error screenshot files directly to MinIO Object Storage (port `9000` / `9001`) via HTTP.
 * **Message Queue:** `siphon-ingress` serializes the incoming Protobuf payloads into JSON and publishes them to RabbitMQ (`siphon-buffer-queue`) to act as a buffer.
 * **Database Ingest:** The `siphon-sink` worker pool consumes messages from RabbitMQ and inserts/updates them idempotently into a MongoDB Time-Series collection.
+* **AI Analysis Pipeline:** If a test fails, `siphon-sink` forwards the rich artifacts (DOM snapshot, Network HAR, Error Trace) to a secondary `siphon-analysis-queue`. The `siphon-analyzer` pool consumes these, queries an LLM to determine the root cause, and asynchronously updates the MongoDB document with the actionable fix.
 
 ### UI Communication Details
 The React UI (`siphon-glass`) interacts with backend services through three primary channels:
@@ -39,6 +46,28 @@ The React UI (`siphon-glass`) interacts with backend services through three prim
    * `GET /api/runs`: Used to fetch the initial batch of recent test runs when the page loads, or to fetch filtered runs when a user selects a project, release, sprint, or enters a search query.
    * `GET /api/stats`: Used to fetch aggregated metrics (status distribution, run counts, project-wise pass rates, and sprint trends) which populate the counters and analytics charts.
 3. **Asset Loading (`http://localhost:9000/siphon-screenshots/...`):** When a test case fails and contains a failure screenshot link, the UI directly fetches and renders the physical PNG image from the public MinIO bucket.
+
+---
+
+## AI-Powered Test Failure Analyzer 🧠
+
+Siphon uses large language models (LLMs) as virtual SDETs to automatically triage end-to-end test failures with zero added latency on the ingestion pipeline.
+
+When a test failure occurs, Siphon ingests the test's **DOM Snapshot**, **Network HAR data**, and **Error Trace**. These rich artifacts are forwarded asynchronously via RabbitMQ to the `siphon-analyzer` worker pool. 
+
+The analyzer queries the configured LLM and provides:
+1. **Categorization:** Classifies the failure into `Locator_Changed`, `API_Failure`, `Data_Stale`, or `Environment_Issue`.
+2. **Root Cause:** A concise 2-sentence explanation of why the test failed based on the DOM state and Network traffic.
+3. **Suggested Fix:** A code snippet with a drop-in replacement or correction (e.g., updating a stale Playwright/Cypress locator).
+
+### Configuring the LLM
+The AI integration is completely configurable via the Siphon dashboard UI. 
+Click **AI Settings** in the top navigation bar to configure your provider. Siphon supports:
+- **OpenAI** (e.g. `gpt-4o-mini`, `gpt-4o`)
+- **Anthropic** (e.g. `claude-3-5-sonnet`)
+- **Ollama / Custom** (OpenAI-compatible endpoints for local execution)
+
+*Note: The `seeder` script pre-populates 70% of synthetic test failures with pre-computed AI analysis so you can demo the feature immediately without needing an API key.*
 
 ---
 
@@ -51,6 +80,7 @@ siphon/
 ├── apps/
 │   └── siphon-glass/            # Vite + React + TS dashboard client (Recharts, Lucide)
 ├── services/
+│   ├── siphon-analyzer/         # Go LLM dispatcher classifying end-to-end test failures
 │   ├── siphon-ingress/          # Go gRPC stream ingestion edge service (Binary Protobuf)
 │   ├── siphon-sink/             # Go consumer worker pool inserting to MongoDB
 │   └── siphon-stream-api/       # Go Gorilla WebSocket server tailing Mongo
@@ -73,6 +103,7 @@ siphon/
 | **`siphon-glass`** | `5173` | React, Recharts, Lucide | Premium, dark-mode real-time visual dashboard |
 | **`siphon-ingress`** | `50051` | Go, gRPC, RabbitMQ | High-performance metrics edge stream ingestion |
 | **`siphon-sink`** | *Daemon* | Go, MongoDB | Concurrent worker pool executing idempotent data writes |
+| **`siphon-analyzer`** | *Daemon* | Go, LLMs (OpenAI/Anthropic) | Asynchronous AI agent for resolving flaky UI/API test failures |
 | **`siphon-stream-api`** | `8080` | Go, Gin, WebSockets | WebSockets and REST endpoint data stream tailer |
 | **MongoDB** | `27017` | MongoDB Community | Document database storing flat test metadata |
 | **Mongo Express** | `8081` | Web Console UI | Visual interface for exploring Mongo database collections |
@@ -115,6 +146,7 @@ go run clients/seeder/seeder.go
 go run services/siphon-ingress/main.go
 go run services/siphon-sink/main.go
 go run services/siphon-stream-api/main.go
+go run services/siphon-analyzer/main.go
 ```
 
 ### 4. Start the Web Dashboard Client

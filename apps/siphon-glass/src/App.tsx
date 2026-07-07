@@ -1,12 +1,22 @@
 import { useState, useEffect, useRef } from 'react';
 import { AreaChart, Area, BarChart, Bar, LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, Legend, PieChart, Pie, Cell } from 'recharts';
-import { Activity, Clock, Image as ImageIcon, Search, BarChart3, Database, ChevronRight, LayoutGrid, Terminal, Cpu } from 'lucide-react';
+import { Activity, Clock, Image as ImageIcon, Search, BarChart3, Database, ChevronRight, LayoutGrid, Terminal, Cpu, Settings, Brain, AlertTriangle, CheckCircle2, Zap, ShieldAlert, RefreshCw, Eye, EyeOff, Save, X } from 'lucide-react';
 import './App.css';
 
 interface TestStep {
   name: string;
   status: string;
   duration_ms: number;
+}
+
+interface AIAnalysis {
+  category: 'Locator_Changed' | 'API_Failure' | 'Data_Stale' | 'Environment_Issue';
+  confidence: number;
+  root_cause: string;
+  suggested_fix: string;
+  analyzed_at: string;
+  model: string;
+  provider: string;
 }
 
 interface TestRun {
@@ -25,6 +35,12 @@ interface TestRun {
   error_message?: string;
   screenshot_url?: string;
   steps?: TestStep[];
+  dom_snapshot?: string;
+  har_data?: string;
+  error_trace?: string;
+  ai_status?: 'pending' | 'done' | 'error';
+  ai_analysis?: AIAnalysis;
+  ai_error?: string;
 }
 
 interface ProjectMetric {
@@ -41,13 +57,310 @@ interface SprintMetric {
   passed: number;
 }
 
+interface LLMSettings {
+  provider: string;
+  model: string;
+  base_url: string;
+  has_key: boolean;
+}
+
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8080';
 const WS_URL = import.meta.env.VITE_WS_URL || 'ws://localhost:8080';
 
+// ─── AI Category Config ────────────────────────────────────────────────────────
+const AI_CATEGORY_CONFIG: Record<string, { label: string; color: string; icon: React.ReactNode; description: string }> = {
+  'Locator_Changed': {
+    label: 'Locator Changed',
+    color: 'var(--ai-orange)',
+    icon: <AlertTriangle size={14} />,
+    description: 'Selector or DOM structure has changed'
+  },
+  'API_Failure': {
+    label: 'API Failure',
+    color: 'var(--color-fail)',
+    icon: <ShieldAlert size={14} />,
+    description: 'Network or backend API error'
+  },
+  'Data_Stale': {
+    label: 'Data Stale',
+    color: 'var(--ai-yellow)',
+    icon: <RefreshCw size={14} />,
+    description: 'Test data is outdated or expired'
+  },
+  'Environment_Issue': {
+    label: 'Environment Issue',
+    color: 'var(--ai-purple)',
+    icon: <Zap size={14} />,
+    description: 'Infrastructure or config problem'
+  }
+};
+
+const PROVIDER_OPTIONS = [
+  { value: 'openai', label: 'OpenAI', defaultModel: 'gpt-4o-mini', needsKey: true },
+  { value: 'anthropic', label: 'Anthropic', defaultModel: 'claude-3-5-haiku-20241022', needsKey: true },
+  { value: 'openai_compatible', label: 'OpenAI-Compatible (Ollama, etc.)', defaultModel: 'llama3', needsKey: false },
+];
+
+// ─── Settings Modal ─────────────────────────────────────────────────────────
+function SettingsModal({ onClose }: { onClose: () => void }) {
+  const [settings, setSettings] = useState<LLMSettings>({ provider: 'openai', model: 'gpt-4o-mini', base_url: '', has_key: false });
+  const [apiKey, setApiKey] = useState('');
+  const [showKey, setShowKey] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [saved, setSaved] = useState(false);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    fetch(`${API_URL}/api/settings`)
+      .then(r => r.json())
+      .then(data => { setSettings(data); setLoading(false); })
+      .catch(() => setLoading(false));
+  }, []);
+
+  const selectedProvider = PROVIDER_OPTIONS.find(p => p.value === settings.provider) || PROVIDER_OPTIONS[0];
+
+  const handleProviderChange = (value: string) => {
+    const p = PROVIDER_OPTIONS.find(opt => opt.value === value);
+    setSettings(prev => ({ ...prev, provider: value, model: p?.defaultModel || '' }));
+  };
+
+  const handleSave = async () => {
+    setSaving(true);
+    try {
+      await fetch(`${API_URL}/api/settings`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          provider: settings.provider,
+          api_key: apiKey || (settings.has_key ? '••••••••' : ''),
+          model: settings.model,
+          base_url: settings.base_url,
+        }),
+      });
+      setSaved(true);
+      setApiKey('');
+      setSettings(prev => ({ ...prev, has_key: prev.has_key || apiKey.length > 0 }));
+      setTimeout(() => setSaved(false), 2500);
+    } catch {
+      /* ignore */
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="modal-overlay" onClick={onClose}>
+      <div className="settings-modal" onClick={e => e.stopPropagation()}>
+        <div className="settings-modal-header">
+          <div className="settings-modal-title">
+            <Brain size={20} />
+            <span>AI Analyzer Settings</span>
+          </div>
+          <button className="modal-close-btn" onClick={onClose}><X size={18} /></button>
+        </div>
+
+        {loading ? (
+          <div className="settings-loading">
+            <div className="shimmer-line" style={{ width: '60%' }}></div>
+            <div className="shimmer-line" style={{ width: '80%' }}></div>
+          </div>
+        ) : (
+          <div className="settings-form">
+            <div className="settings-info-banner">
+              <Brain size={14} />
+              <span>Configure your LLM provider to enable automatic failure categorization and fix suggestions on all FAIL results.</span>
+            </div>
+
+            {/* Provider Selector */}
+            <div className="settings-field">
+              <label className="settings-label">LLM Provider</label>
+              <div className="provider-grid">
+                {PROVIDER_OPTIONS.map(opt => (
+                  <button
+                    key={opt.value}
+                    className={`provider-btn ${settings.provider === opt.value ? 'active' : ''}`}
+                    onClick={() => handleProviderChange(opt.value)}
+                  >
+                    {opt.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* API Key */}
+            {selectedProvider.needsKey && (
+              <div className="settings-field">
+                <label className="settings-label">
+                  API Key
+                  {settings.has_key && <span className="key-badge">● Configured</span>}
+                </label>
+                <div className="key-input-wrap">
+                  <input
+                    type={showKey ? 'text' : 'password'}
+                    className="settings-input"
+                    placeholder={settings.has_key ? '••••••••  (leave blank to keep current)' : 'Enter your API key...'}
+                    value={apiKey}
+                    onChange={e => setApiKey(e.target.value)}
+                    id="llm-api-key-input"
+                  />
+                  <button className="key-toggle-btn" onClick={() => setShowKey(v => !v)}>
+                    {showKey ? <EyeOff size={15} /> : <Eye size={15} />}
+                  </button>
+                </div>
+                <p className="settings-hint">Stored securely in MongoDB. Never logged or exposed in responses.</p>
+              </div>
+            )}
+
+            {/* Base URL (for openai_compatible) */}
+            {settings.provider === 'openai_compatible' && (
+              <div className="settings-field">
+                <label className="settings-label">Base URL</label>
+                <input
+                  type="text"
+                  className="settings-input"
+                  placeholder="http://localhost:11434  (Ollama default)"
+                  value={settings.base_url}
+                  onChange={e => setSettings(prev => ({ ...prev, base_url: e.target.value }))}
+                />
+              </div>
+            )}
+
+            {/* Model */}
+            <div className="settings-field">
+              <label className="settings-label">Model</label>
+              <input
+                type="text"
+                className="settings-input"
+                placeholder={selectedProvider.defaultModel}
+                value={settings.model}
+                onChange={e => setSettings(prev => ({ ...prev, model: e.target.value }))}
+              />
+            </div>
+
+            <button
+              className={`settings-save-btn ${saved ? 'saved' : ''}`}
+              onClick={handleSave}
+              disabled={saving}
+            >
+              {saved ? <><CheckCircle2 size={16} /> Saved!</> : saving ? 'Saving...' : <><Save size={16} /> Save Settings</>}
+            </button>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ─── AI Insights Panel ─────────────────────────────────────────────────────
+function AIInsightsPanel({ run }: { run: TestRun }) {
+  const [open, setOpen] = useState(false);
+
+  if (run.status !== 'FAIL') return null;
+
+  const ai = run.ai_analysis;
+  const status = run.ai_status;
+  const catConfig = ai ? AI_CATEGORY_CONFIG[ai.category] : null;
+
+  return (
+    <div className="ai-insights-wrapper">
+      <button
+        className={`ai-badge-btn ${status === 'done' ? 'done' : status === 'error' ? 'error' : 'pending'}`}
+        onClick={() => setOpen(v => !v)}
+        id={`ai-insights-btn-${run.execution_id}-${run.test_case_id}`}
+      >
+        <Brain size={13} />
+        {status === 'done' && ai
+          ? <span>AI: <strong>{catConfig?.label}</strong></span>
+          : status === 'error'
+          ? <span>AI Analysis Error</span>
+          : <span>Analyzing...</span>
+        }
+        <ChevronRight size={12} className={`ai-chevron ${open ? 'open' : ''}`} />
+      </button>
+
+      {open && (
+        <div className="ai-panel">
+          {status === 'pending' && (
+            <div className="ai-shimmer-state">
+              <div className="ai-spinner" />
+              <div className="ai-shimmer-lines">
+                <div className="shimmer-line" style={{ width: '55%' }}></div>
+                <div className="shimmer-line" style={{ width: '85%' }}></div>
+                <div className="shimmer-line" style={{ width: '70%' }}></div>
+              </div>
+              <p className="ai-shimmer-label">LLM analysis in progress...</p>
+            </div>
+          )}
+
+          {status === 'error' && (
+            <div className="ai-error-state">
+              <ShieldAlert size={18} />
+              <p>Analysis failed: {run.ai_error || 'LLM provider not configured.'}</p>
+              <p className="ai-error-hint">Configure your API key in <strong>Settings</strong> to enable AI analysis.</p>
+            </div>
+          )}
+
+          {status === 'done' && ai && catConfig && (
+            <div className="ai-result">
+              {/* Category + Confidence */}
+              <div className="ai-result-header">
+                <span className="ai-category-pill" style={{ background: catConfig.color + '22', color: catConfig.color, borderColor: catConfig.color + '44' }}>
+                  {catConfig.icon}
+                  {catConfig.label}
+                </span>
+                <div className="ai-confidence">
+                  <span className="ai-confidence-label">Confidence</span>
+                  <div className="ai-confidence-bar-track">
+                    <div
+                      className="ai-confidence-bar-fill"
+                      style={{
+                        width: `${Math.round(ai.confidence * 100)}%`,
+                        background: ai.confidence > 0.8 ? 'var(--color-pass)' : ai.confidence > 0.6 ? 'var(--ai-yellow)' : 'var(--color-fail)'
+                      }}
+                    />
+                  </div>
+                  <span className="ai-confidence-pct">{Math.round(ai.confidence * 100)}%</span>
+                </div>
+              </div>
+
+              {/* Root Cause */}
+              <div className="ai-section">
+                <div className="ai-section-title">
+                  <Brain size={13} />
+                  Root Cause
+                </div>
+                <p className="ai-root-cause">{ai.root_cause}</p>
+              </div>
+
+              {/* Suggested Fix */}
+              <div className="ai-section">
+                <div className="ai-section-title">
+                  <CheckCircle2 size={13} />
+                  Suggested Fix
+                </div>
+                <pre className="ai-fix-code">{ai.suggested_fix}</pre>
+              </div>
+
+              {/* Footer metadata */}
+              <div className="ai-meta-footer">
+                <span>Model: <strong>{ai.model}</strong></span>
+                <span>Provider: <strong>{ai.provider}</strong></span>
+                <span>Analyzed: <strong>{new Date(ai.analyzed_at).toLocaleTimeString()}</strong></span>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── Main App ──────────────────────────────────────────────────────────────
 export default function App() {
   const [runs, setRuns] = useState<TestRun[]>([]);
   const [projectMetrics, setProjectMetrics] = useState<ProjectMetric[]>([]);
   const [sprintMetrics, setSprintMetrics] = useState<SprintMetric[]>([]);
+  const [aiCategoryDist, setAICategoryDist] = useState<{ _id: string; count: number }[]>([]);
   
   const [options, setOptions] = useState({
     projects: [] as string[],
@@ -72,7 +385,8 @@ export default function App() {
   });
 
   const [connected, setConnected] = useState(false);
-  const [activeTab, setActiveTab] = useState<'stream' | 'analytics'>('stream');
+  const [activeTab, setActiveTab] = useState<'stream' | 'analytics' | 'settings'>('stream');
+  const [showSettingsModal, setShowSettingsModal] = useState(false);
 
   const filtersRef = useRef(filters);
   useEffect(() => {
@@ -179,6 +493,7 @@ export default function App() {
 
           if (data.project_metrics) setProjectMetrics(data.project_metrics);
           if (data.sprint_metrics) setSprintMetrics(data.sprint_metrics);
+          if (data.ai_category_dist) setAICategoryDist(data.ai_category_dist);
 
           if (data.filter_options) {
             setOptions({
@@ -211,6 +526,14 @@ export default function App() {
     { name: 'Skipped', value: stats.skipped, color: 'var(--color-skipped)' }
   ].filter(d => d.value > 0);
 
+  const aiPieData = aiCategoryDist
+    .filter(d => d._id)
+    .map(d => ({
+      name: AI_CATEGORY_CONFIG[d._id]?.label || d._id,
+      value: d.count,
+      color: AI_CATEGORY_CONFIG[d._id]?.color || '#888'
+    }));
+
   const getLatencyChartData = () => {
     return [...runs]
       .reverse()
@@ -223,6 +546,9 @@ export default function App() {
 
   return (
     <div className="layout-wrapper">
+      {/* Settings Modal */}
+      {showSettingsModal && <SettingsModal onClose={() => setShowSettingsModal(false)} />}
+
       {/* Collapsable Left Sidebar */}
       <aside className="sidebar">
         <div className="sidebar-brand">
@@ -249,6 +575,15 @@ export default function App() {
           >
             <BarChart3 size={16} />
             <span>Advanced Analytics</span>
+            <ChevronRight size={14} className="chevron" />
+          </button>
+          <button
+            className={`nav-item ${activeTab === 'settings' ? 'active' : ''}`}
+            onClick={() => setShowSettingsModal(true)}
+            id="open-settings-btn"
+          >
+            <Settings size={16} />
+            <span>AI Settings</span>
             <ChevronRight size={14} className="chevron" />
           </button>
         </div>
@@ -314,13 +649,19 @@ export default function App() {
             <p>Real-time metrics pipeline execution dashboard</p>
           </div>
 
-          <div className="status-indicator" style={{ 
-            color: connected ? 'var(--color-pass)' : 'var(--color-fail)',
-            background: connected ? 'rgba(16, 185, 129, 0.1)' : 'rgba(239, 68, 68, 0.1)',
-            borderColor: connected ? 'rgba(16, 185, 129, 0.2)' : 'rgba(239, 68, 68, 0.2)'
-          }}>
-            <span className="dot" style={{ backgroundColor: connected ? 'var(--color-pass)' : 'var(--color-fail)' }}></span>
-            {connected ? 'Pipeline Connected' : 'Pipeline Reconnecting'}
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+            <button className="header-settings-btn" onClick={() => setShowSettingsModal(true)} id="header-settings-btn">
+              <Brain size={15} />
+              AI Settings
+            </button>
+            <div className="status-indicator" style={{ 
+              color: connected ? 'var(--color-pass)' : 'var(--color-fail)',
+              background: connected ? 'rgba(16, 185, 129, 0.1)' : 'rgba(239, 68, 68, 0.1)',
+              borderColor: connected ? 'rgba(16, 185, 129, 0.2)' : 'rgba(239, 68, 68, 0.2)'
+            }}>
+              <span className="dot" style={{ backgroundColor: connected ? 'var(--color-pass)' : 'var(--color-fail)' }}></span>
+              {connected ? 'Pipeline Connected' : 'Pipeline Reconnecting'}
+            </div>
           </div>
         </header>
 
@@ -419,6 +760,9 @@ export default function App() {
                           {run.error_message}
                         </div>
                       )}
+
+                      {/* AI Insights Panel (FAIL only) */}
+                      <AIInsightsPanel run={run} />
 
                       {run.screenshot_url && run.status === 'FAIL' && (
                         <div className="screenshot-container">
@@ -540,9 +884,53 @@ export default function App() {
               </div>
             </div>
 
+            {/* AI Category Distribution Chart */}
+            {aiPieData.length > 0 && (
+              <div className="charts-grid-row" style={{ marginTop: '2rem' }}>
+                <div className="panel chart-container" style={{ flex: '1' }}>
+                  <h3 className="panel-title">
+                    AI Failure Categorization
+                    <Brain size={16} style={{ color: 'var(--ai-purple)' }} />
+                  </h3>
+                  <div style={{ width: '100%', height: '240px', display: 'flex', justifyContent: 'center', alignItems: 'center' }}>
+                    <ResponsiveContainer width="100%" height="100%">
+                      <PieChart>
+                        <Pie data={aiPieData} cx="50%" cy="50%" innerRadius={50} outerRadius={75} paddingAngle={4} dataKey="value">
+                          {aiPieData.map((entry, idx) => <Cell key={idx} fill={entry.color} />)}
+                        </Pie>
+                        <Tooltip contentStyle={{ background: '#111827', borderColor: 'var(--border-glass)', borderRadius: '8px' }} />
+                        <Legend verticalAlign="bottom" height={36} />
+                      </PieChart>
+                    </ResponsiveContainer>
+                  </div>
+                </div>
+
+                <div className="panel" style={{ flex: '1' }}>
+                  <h3 className="panel-title">AI Category Breakdown</h3>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem', marginTop: '1rem' }}>
+                    {aiPieData.map(cat => {
+                      const total = aiPieData.reduce((s, d) => s + d.value, 0);
+                      const pct = total > 0 ? Math.round((cat.value / total) * 100) : 0;
+                      return (
+                        <div key={cat.name} style={{ display: 'flex', flexDirection: 'column', gap: '0.3rem' }}>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.85rem' }}>
+                            <span style={{ color: cat.color, fontWeight: 600 }}>{cat.name}</span>
+                            <span style={{ color: 'var(--text-secondary)' }}>{cat.value} ({pct}%)</span>
+                          </div>
+                          <div style={{ height: '4px', background: 'rgba(255,255,255,0.06)', borderRadius: '2px', overflow: 'hidden' }}>
+                            <div style={{ height: '100%', width: `${pct}%`, background: cat.color, borderRadius: '2px', transition: 'width 0.6s ease' }} />
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              </div>
+            )}
+
             <div className="charts-grid-row" style={{ marginTop: '2rem' }}>
               <div className="panel chart-container" style={{ flex: '2' }}>
-                <h3 className="panel-title">Sprint Velocity & Pass Ratios</h3>
+                <h3 className="panel-title">Sprint Velocity &amp; Pass Ratios</h3>
                 <div style={{ width: '100%', height: '260px', marginTop: '1rem' }}>
                   {sprintMetrics.length === 0 ? (
                     <p style={{ color: 'var(--text-secondary)', textAlign: 'center', paddingTop: '5rem' }}>No sprint history</p>

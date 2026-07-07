@@ -2,10 +2,8 @@ package infra
 
 import (
 	"context"
-	"log"
 	"os"
 
-	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
 )
@@ -39,17 +37,8 @@ func NewMongoClient() (*MongoClient, error) {
 
 	collection := db.Collection("siphon_results")
 
-	// Ensure unique index compound key exists as fail-safe
-	_, err = collection.Indexes().CreateOne(context.Background(), mongo.IndexModel{
-		Keys: bson.D{
-			{Key: "execution_id", Value: 1},
-			{Key: "test_case_id", Value: 1},
-		},
-		Options: options.Index().SetUnique(true),
-	})
-	if err != nil {
-		log.Printf("Unique index compound keys validated: %v", err)
-	}
+	// Unique compound indexes are not supported on Time-Series collections.
+	// The unique constraint is handled at the application logic level during ingestion instead.
 
 	return &MongoClient{
 		Client:     client,

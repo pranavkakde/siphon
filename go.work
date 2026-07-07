@@ -1,8 +1,9 @@
-go 1.22
+go 1.25.0
 
 use (
 	./clients/go-hook
 	./clients/seeder
+	./services/siphon-analyzer
 	./services/siphon-ingress
 	./services/siphon-sink
 	./services/siphon-stream-api

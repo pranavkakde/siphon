@@ -8,14 +8,15 @@ import (
 	"go.mongodb.org/mongo-driver/mongo/options"
 )
 
-// MongoClient wraps database connectivity for siphon-stream-api.
+// MongoClient wraps the analyzer's MongoDB connection.
 type MongoClient struct {
 	Client     *mongo.Client
 	DB         *mongo.Database
 	Collection *mongo.Collection
 }
 
-// NewMongoClient establishes database connectivity.
+// NewMongoClient connects to MongoDB and returns handles for both the
+// results collection and the parent database (for the settings collection).
 func NewMongoClient() (*MongoClient, error) {
 	mongoURL := os.Getenv("MONGO_URL")
 	if mongoURL == "" {
@@ -36,7 +37,7 @@ func NewMongoClient() (*MongoClient, error) {
 	}, nil
 }
 
-// Close disconnects the Mongo instance.
+// Close disconnects the Mongo client.
 func (m *MongoClient) Close() {
 	if m.Client != nil {
 		m.Client.Disconnect(context.Background())

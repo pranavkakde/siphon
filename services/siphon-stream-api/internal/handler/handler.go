@@ -16,6 +16,7 @@ import (
 type APIHandler struct {
 	Collection *mongo.Collection
 	Hub        *hub.Hub
+	DB         *mongo.Database
 }
 
 // HandleWS handles WebSocket connections.
@@ -75,6 +76,110 @@ func (h *APIHandler) GetRecentRuns(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, results)
+}
+
+// GetTestAnalysis fetches the AI analysis for a specific test case.
+func (h *APIHandler) GetTestAnalysis(c *gin.Context) {
+	execID := c.Param("execution_id")
+	testCaseID := c.Param("test_case_id")
+
+	var result bson.M
+	err := h.Collection.FindOne(
+		c.Request.Context(),
+		bson.M{"execution_id": execID, "test_case_id": testCaseID},
+		options.FindOne().SetProjection(bson.M{
+			"ai_analysis": 1,
+			"ai_status":   1,
+			"ai_error":    1,
+		}),
+	).Decode(&result)
+	if err == mongo.ErrNoDocuments {
+		c.JSON(http.StatusNotFound, gin.H{"error": "test case not found"})
+		return
+	}
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, result)
+}
+
+// ─── Settings Endpoints ──────────────────────────────────────────────────────
+
+// settingsDoc is the shape stored in the siphon_settings collection.
+type settingsDoc struct {
+	Singleton string `bson:"singleton" json:"-"`
+	Provider  string `bson:"provider"  json:"provider"`
+	// APIKey is write-only from the UI — the GET response masks it for security.
+	APIKey  string `bson:"api_key"  json:"api_key,omitempty"`
+	Model   string `bson:"model"    json:"model"`
+	BaseURL string `bson:"base_url" json:"base_url"`
+}
+
+// GetSettings returns the current LLM configuration (API key is masked).
+func (h *APIHandler) GetSettings(c *gin.Context) {
+	settingsCol := h.DB.Collection("siphon_settings")
+	var doc settingsDoc
+	err := settingsCol.FindOne(c.Request.Context(), bson.M{"singleton": "llm_config"}).Decode(&doc)
+	if err == mongo.ErrNoDocuments {
+		c.JSON(http.StatusOK, gin.H{
+			"provider": "",
+			"model":    "",
+			"base_url": "",
+			"has_key":  false,
+		})
+		return
+	}
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	// Mask the API key — only reveal whether one is configured
+	c.JSON(http.StatusOK, gin.H{
+		"provider": doc.Provider,
+		"model":    doc.Model,
+		"base_url": doc.BaseURL,
+		"has_key":  doc.APIKey != "",
+	})
+}
+
+// SaveSettings persists LLM provider configuration.
+func (h *APIHandler) SaveSettings(c *gin.Context) {
+	var body struct {
+		Provider string `json:"provider"`
+		APIKey   string `json:"api_key"`
+		Model    string `json:"model"`
+		BaseURL  string `json:"base_url"`
+	}
+	if err := c.ShouldBindJSON(&body); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body"})
+		return
+	}
+
+	settingsCol := h.DB.Collection("siphon_settings")
+
+	// If the incoming key is the mask placeholder, preserve the existing key
+	updateFields := bson.M{
+		"singleton": "llm_config",
+		"provider":  body.Provider,
+		"model":     body.Model,
+		"base_url":  body.BaseURL,
+	}
+	if body.APIKey != "" && body.APIKey != "••••••••" {
+		updateFields["api_key"] = body.APIKey
+	}
+
+	_, err := settingsCol.UpdateOne(
+		c.Request.Context(),
+		bson.M{"singleton": "llm_config"},
+		bson.M{"$set": updateFields},
+		options.Update().SetUpsert(true),
+	)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"success": true})
 }
 
 // GetStats processes system stats calculations and aggregations based on selected filters.
@@ -200,16 +305,32 @@ func (h *APIHandler) GetStats(c *gin.Context) {
 		_ = sprintCursor.All(c.Request.Context(), &sprintMetrics)
 	}
 
+	// AI Category Distribution (for FAIL cases with completed analysis)
+	aiCategoryPipeline := mongo.Pipeline{
+		bson.D{{Key: "$match", Value: bson.M{"status": "FAIL", "ai_status": "done"}}},
+		bson.D{{Key: "$group", Value: bson.D{
+			{Key: "_id", Value: "$ai_analysis.category"},
+			{Key: "count", Value: bson.D{{Key: "$sum", Value: 1}}},
+		}}},
+	}
+	aiCursor, _ := h.Collection.Aggregate(c.Request.Context(), aiCategoryPipeline)
+	var aiCategories []bson.M
+	if aiCursor != nil {
+		defer aiCursor.Close(c.Request.Context())
+		_ = aiCursor.All(c.Request.Context(), &aiCategories)
+	}
+
 	// Collect list of unique Projects, Releases, Sprints for filter dropdown UI elements
 	projects, _ := h.Collection.Distinct(c.Request.Context(), "project", bson.M{})
 	releases, _ := h.Collection.Distinct(c.Request.Context(), "release", bson.M{})
 	sprints, _ := h.Collection.Distinct(c.Request.Context(), "sprint", bson.M{})
 
 	c.JSON(http.StatusOK, gin.H{
-		"status_distribution": stats,
-		"total_executions":    totalSuites,
-		"project_metrics":     projectMetrics,
-		"sprint_metrics":      sprintMetrics,
+		"status_distribution":  stats,
+		"total_executions":     totalSuites,
+		"project_metrics":      projectMetrics,
+		"sprint_metrics":       sprintMetrics,
+		"ai_category_dist":     aiCategories,
 		"filter_options": gin.H{
 			"projects": projects,
 			"releases": releases,
